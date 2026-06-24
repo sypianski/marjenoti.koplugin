@@ -1,4 +1,4 @@
-# koreader-marjenoti
+# marjenoti.koplugin
 
 A [KOReader](https://github.com/koreader/koreader) plugin that renders annotation notes in the **right page margin**, beside their highlights, like glosses in a critical edition.
 
