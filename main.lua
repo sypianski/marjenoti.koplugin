@@ -100,6 +100,26 @@ function MarginNotes:init()
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
+    -- Integration C (pluginaro): let visel jump between margin notes (key N).
+    -- Direction of data flow is the reverse of provide/call_provided: the
+    -- host (visel) owns the key event, the provider (marjenoti) owns the
+    -- data. The registration itself carries the implementation —
+    -- `get_targets` is stored in the registry entry and the host reads it
+    -- lazily via Pluginaro.list_for("visel"), so no provide round-trip is
+    -- needed. Re-registration on every document open silently replaces the
+    -- entry (fresh closure captures the current instance — last writer wins).
+    local plugin_self = self
+    Pluginaro.register("visel", {
+        id              = "note_jump",
+        provider        = "marjenoti",
+        section         = "extensions",
+        menu_location   = "host",
+        label           = "Skok do notatek marjenoti (klawisz N)",
+        default_enabled = false,
+        get_targets     = function(page_ctx) -- luacheck: ignore page_ctx
+            return plugin_self:_note_targets()
+        end,
+    })
 end
 
 function MarginNotes:_apply_font()
@@ -215,6 +235,46 @@ function MarginNotes:_update_items()
     table.sort(self._items, function(a, b) return a.y_top < b.y_top end)
     self._nx     = nx
     self._note_w = note_w
+end
+
+-- Integration C (pluginaro): sorted xpointers of note-carrying annotations
+-- visible on the current page, in screen order (top→bottom, then
+-- left→right). Consumed by visel's note_jump (key N) via the registry's
+-- get_targets hook. Mirrors the visibility filter of _update_items, but
+-- returns positions (ann.pos0) instead of layout boxes.
+function MarginNotes:_note_targets()
+    local ui  = self.ui
+    local doc = ui and ui.document
+    if not doc then return {} end
+    local anns = ui.annotation and ui.annotation.annotations
+    if not anns then return {} end
+
+    local sh  = Screen:getHeight()
+    local raw = {}
+    for _, ann in pairs(anns) do
+        if ann.note and ann.note ~= "" and ann.pos0 and ann.pos1 then
+            local ok, boxes = pcall(function()
+                return doc:getScreenBoxesFromPositions(ann.pos0, ann.pos1, true)
+            end)
+            if ok and boxes and #boxes > 0 then
+                local y_min, x_min, y_max = math.huge, math.huge, -math.huge
+                for _, b in ipairs(boxes) do
+                    if b.y < y_min then y_min = b.y; x_min = b.x end
+                    if b.y + b.h > y_max then y_max = b.y + b.h end
+                end
+                if y_max > 0 and y_min < sh then
+                    table.insert(raw, { xp = ann.pos0, y = y_min, x = x_min })
+                end
+            end
+        end
+    end
+    table.sort(raw, function(a, b)
+        if a.y ~= b.y then return a.y < b.y end
+        return a.x < b.x
+    end)
+    local out = {}
+    for _, r in ipairs(raw) do out[#out + 1] = r.xp end
+    return out
 end
 
 function MarginNotes:onPageUpdate()    self:_update_items() end
