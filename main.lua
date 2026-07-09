@@ -18,6 +18,7 @@ local UIManager     = require("ui/uimanager")
 local Widget        = require("ui/widget/widget")
 local _             = require("gettext")
 local Screen        = Device.screen
+local Pluginaro     = require("pluginaro")
 
 -- ── Font defaults ─────────────────────────────────────────────────────────────
 local DEFAULT_FONT_SIZE = 11
@@ -325,19 +326,29 @@ function MarginNotes:addToMainMenu(menu_items)
         })
     end
 
+    local sub_items = {
+        {
+            text           = _("Note font"),
+            sub_item_table = font_items,
+        },
+        {
+            text           = _("Font size"),
+            sub_item_table = size_items,
+        },
+    }
+
+    local ext_rows = Pluginaro.build_ext_menu("marjenoti")
+    if #ext_rows > 0 then
+        table.insert(sub_items, {
+            text = _("Rozszerzenia"),
+            sub_item_table = ext_rows,
+        })
+    end
+
     menu_items.marjenoti = {
         text           = _("Marjenoti"),
         sorting_hint   = "more_tools",
-        sub_item_table = {
-            {
-                text           = _("Note font"),
-                sub_item_table = font_items,
-            },
-            {
-                text           = _("Font size"),
-                sub_item_table = size_items,
-            },
-        },
+        sub_item_table = sub_items,
     }
 end
 

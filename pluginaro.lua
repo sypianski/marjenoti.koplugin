@@ -305,10 +305,105 @@ function Pluginaro.guard(handler)
     end
 end
 
---- Stub — Task 3 fills in the toggle/signpost menu builder.
--- Returns a sub_item_table-shaped array; empty = caller skips the section.
-function Pluginaro.build_ext_menu(...)
-    return {}
+--- Build the „Rozszerzenia" sub_item_table for a given plugin.
+--
+-- Scans every registration where `self_name` appears as host OR provider
+-- and emits one menu row per registration:
+--
+--   Toggle row — when `self_name` is the `menu_location` side:
+--     • menu_location = 'host'     → self is the host plugin
+--     • menu_location = 'provider' → self is the provider plugin
+--     • menu_location = 'both'     → self is either (toggle in both)
+--   Rendered as a checkable item; callback flips set_enabled.
+--
+--   Annotation row — when `self_name` is the OTHER side:
+--     • non-clickable (enabled_func → false); carries help_text naming where
+--       the toggle actually lives: „Włącz w: Ustawienia <other> → Rozszerzenia"
+--
+-- @param self_name  string — name of the calling plugin (e.g. "kopad")
+-- @param label_prefix  (optional) string prepended to each row label;
+--   used by the keyreader host to prefix visel registrations ("visel: ").
+-- @return array — empty when nothing is registered involving self_name.
+function Pluginaro.build_ext_menu(self_name, label_prefix)
+    if type(self_name) ~= "string" or self_name == "" then return {} end
+    label_prefix = (type(label_prefix) == "string" and label_prefix) or ""
+
+    local rows = {}
+    -- Sort for deterministic menu order: (section, host, id)
+    local relevant = {}
+    for _, entry in pairs(registry()) do
+        if entry.host == self_name or entry.provider == self_name then
+            relevant[#relevant + 1] = entry
+        end
+    end
+    table.sort(relevant, function(a, b)
+        local sa, sb = a.section or "", b.section or ""
+        if sa ~= sb then return sa < sb end
+        if a.host ~= b.host then return a.host < b.host end
+        return a.id < b.id
+    end)
+
+    for _, entry in ipairs(relevant) do
+        local host     = entry.host
+        local provider = entry.provider
+        local id       = entry.id
+        local label    = label_prefix .. (entry.label or (provider .. " → " .. id))
+        local ml       = entry.menu_location or "host"
+
+        -- Determine whether self is the toggle side.
+        local self_is_toggle_side
+        if ml == "both" then
+            self_is_toggle_side = (self_name == host or self_name == provider)
+        elseif ml == "host" then
+            self_is_toggle_side = (self_name == host)
+        elseif ml == "provider" then
+            self_is_toggle_side = (self_name == provider)
+        else
+            self_is_toggle_side = (self_name == host)
+        end
+
+        if self_is_toggle_side then
+            -- Toggle row
+            local h, p, i = host, provider, id  -- local captures for closures
+            rows[#rows + 1] = {
+                text_func = function()
+                    return label
+                end,
+                checked_func = function()
+                    return Pluginaro.is_enabled(h, p, i)
+                end,
+                callback = function()
+                    local now = Pluginaro.is_enabled(h, p, i)
+                    Pluginaro.set_enabled(h, p, i, not now)
+                end,
+                keep_menu_open = true,
+            }
+        else
+            -- Annotation / signpost row (non-clickable)
+            -- The toggle lives on the "other" side: if self is provider,
+            -- the toggle is in the host's menu (and vice-versa for
+            -- menu_location='provider').
+            local other_plugin
+            if ml == "host" then
+                -- Toggle lives at host; self is provider → point to host
+                other_plugin = host
+            elseif ml == "provider" then
+                -- Toggle lives at provider; self is host → point to provider
+                other_plugin = provider
+            else
+                -- Fallback
+                other_plugin = (self_name == host) and provider or host
+            end
+            rows[#rows + 1] = {
+                text = "ℹ " .. label,
+                enabled_func = function() return false end,
+                help_text = "Włącz w: Ustawienia " .. other_plugin
+                            .. " → Rozszerzenia",
+            }
+        end
+    end
+
+    return rows
 end
 
 return Pluginaro
