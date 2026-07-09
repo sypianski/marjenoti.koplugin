@@ -178,6 +178,74 @@ function Pluginaro.set_enabled(host, provider, id, enabled)
 end
 
 ----------------------------------------------------------------------
+-- Provided implementations (host → provider call channel)
+--
+-- Some integrations flow "backwards": the *provider* owns the event
+-- source (e.g. kopad receives the gamepad input) while the *host* owns
+-- the reaction (visel moves its selection). For those, the host publishes
+-- an implementation table with Pluginaro.provide(...) and the provider
+-- calls into it with Pluginaro.call_provided(...). call_provided returns
+-- nil — without touching the implementation — unless the extension's
+-- opt-in toggle is ON, so routing stays disabled-by-default like
+-- everything else in the registry.
+--
+-- Zero hard dependency both ways: provide without a matching register is
+-- fine (nobody ever calls), call_provided without a provide returns nil
+-- (caller falls back to its own behaviour).
+----------------------------------------------------------------------
+
+local function provided_registry()
+    _G._pluginaro_provided = _G._pluginaro_provided or {}
+    return _G._pluginaro_provided
+end
+
+--- Publish an implementation table for one extension. Called from the
+-- host plugin (usually at init). Re-providing replaces the previous
+-- table — plugin reloads produce fresh closures, that's expected.
+-- @return true on success; nil, err on invalid arguments.
+function Pluginaro.provide(host, provider, id, impl)
+    local function fail(err)
+        logger.warn("pluginaro: provide rejected: " .. err)
+        return nil, err
+    end
+    if type(host) ~= "string" or host == "" then
+        return fail("host must be a non-empty string")
+    end
+    if type(provider) ~= "string" or provider == "" then
+        return fail("provider must be a non-empty string")
+    end
+    if type(id) ~= "string" or not id:match("^[a-z_]+$") then
+        return fail("invalid id: must be a string matching ^[a-z_]+$")
+    end
+    if type(impl) ~= "table" then
+        return fail("impl must be a table")
+    end
+    provided_registry()[reg_key(host, provider, id)] = impl
+    return true
+end
+
+--- Call one method of a provided implementation. Called from the
+-- provider plugin, typically per event. Returns nil (without calling
+-- anything) when the opt-in toggle is OFF, nothing was provided, the
+-- method is missing, or the implementation errors (pcall'd + logged) —
+-- in every such case the caller just keeps its own default behaviour.
+function Pluginaro.call_provided(host, provider, id, method, ...)
+    if not Pluginaro.is_enabled(host, provider, id) then return nil end
+    local impl = provided_registry()[reg_key(host, provider, id)]
+    if type(impl) ~= "table" then return nil end
+    local fn = impl[method]
+    if type(fn) ~= "function" then return nil end
+    local ok, res = pcall(fn, ...)
+    if not ok then
+        logger.warn("pluginaro: provided method "
+            .. settings_key(host, provider, id) .. "." .. tostring(method)
+            .. " failed: " .. tostring(res))
+        return nil
+    end
+    return res
+end
+
+----------------------------------------------------------------------
 -- Keyboard arbitration (modal-aware key routing)
 --
 -- Family plugins register global shortcuts on ReaderUI.active_widgets.
