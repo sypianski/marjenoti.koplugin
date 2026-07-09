@@ -177,10 +177,132 @@ function Pluginaro.set_enabled(host, provider, id, enabled)
     end
 end
 
---- Stub — Task 2 fills in UIManager._window_stack introspection.
--- Until then no key is ever considered blocked by a modal.
-function Pluginaro.is_modal_active()
+----------------------------------------------------------------------
+-- Keyboard arbitration (modal-aware key routing)
+--
+-- Family plugins register global shortcuts on ReaderUI.active_widgets.
+-- Those handlers fire even when a Menu/dialog is top-of-stack (the key
+-- leaks past the modal because the modal didn't declare it). Wrapping a
+-- handler with Pluginaro.guard makes it no-op (return false, event flows
+-- on) whenever a modal is up or a text input is focused — the modal keeps
+-- exclusive keyboard control until it closes.
+----------------------------------------------------------------------
+
+-- Modal widget classes, resolved lazily by require so the core still
+-- loads in a bare Lua interpreter (each require pcall'd; a missing module
+-- just drops out of the set). Subclasses (FileChooser, ToC's Menu,
+-- BookmarkList, History, …) extend one of these and are matched by the
+-- metatable walk below, so they don't need explicit entries.
+Pluginaro.MODAL_CLASS_MODULES = {
+    "ui/widget/menu",
+    "ui/widget/touchmenu",
+    "ui/widget/inputdialog",
+    "ui/widget/buttondialog",
+    "ui/widget/confirmbox",
+    "ui/widget/multiconfirmbox",
+    "ui/widget/infomessage",
+}
+
+-- Cache of resolved class tables (built once, keyed by the class table).
+local modal_classes
+
+local function get_modal_classes()
+    if modal_classes then return modal_classes end
+    modal_classes = {}
+    for _, mod in ipairs(Pluginaro.MODAL_CLASS_MODULES) do
+        local ok, cls = pcall(require, mod)
+        if ok and type(cls) == "table" then
+            modal_classes[cls] = true
+        end
+    end
+    -- Allow tests / callers to inject extra classes directly.
+    if type(Pluginaro.MODAL_CLASSES) == "table" then
+        for cls in pairs(Pluginaro.MODAL_CLASSES) do
+            modal_classes[cls] = true
+        end
+    end
+    return modal_classes
+end
+
+-- Reset the memoized class set — used by tests that swap MODAL_CLASSES.
+function Pluginaro._reset_modal_cache()
+    modal_classes = nil
+end
+
+-- True iff `widget`'s class (walking the __index metatable chain) is one
+-- of the modal classes. KOReader widgets use `Class:extend{}` which sets
+-- each instance's metatable to `{ __index = Class }`, and each Class's
+-- metatable to `{ __index = SuperClass }`, so a chain walk covers every
+-- subclass without listing them explicitly.
+local function is_modal_widget(widget)
+    if type(widget) ~= "table" then return false end
+    local classes = get_modal_classes()
+    if next(classes) == nil then return false end
+    local mt = getmetatable(widget)
+    local seen = {}
+    while type(mt) == "table" do
+        local cls = mt.__index
+        if type(cls) ~= "table" then break end
+        if classes[cls] then return true end
+        if seen[cls] then break end
+        seen[cls] = true
+        mt = getmetatable(cls)
+    end
     return false
+end
+
+--- True when the top-of-stack widget is a blocking modal (Menu, dialog,
+-- popup, …). Family global shortcuts consult this and stand down while it
+-- holds, giving the modal exclusive keyboard control.
+function Pluginaro.is_modal_active()
+    local deps = get_deps()
+    local uimanager = deps and deps.uimanager
+    if not uimanager then return false end
+    local stack = uimanager._window_stack
+    if type(stack) ~= "table" then return false end
+    local n = #stack
+    if n == 0 then return false end
+    return is_modal_widget(stack[n].widget)
+end
+
+-- Depth-first scan for a focused text input in a widget tree. InputText
+-- sets `focused = true` and carries a `charlist` buffer; that pair is the
+-- signature. `seen` guards against cyclic widget graphs.
+local function has_focused_input(widget, seen)
+    if type(widget) ~= "table" then return false end
+    seen = seen or {}
+    if seen[widget] then return false end
+    seen[widget] = true
+    if widget.focused and widget.charlist then return true end
+    for _, child in ipairs(widget) do
+        if has_focused_input(child, seen) then return true end
+    end
+    return false
+end
+
+--- True when the top-of-stack widget contains a focused text input, so a
+-- shortcut should yield the keystroke to the editor/search field instead
+-- of firing its action. (Migrated from keyremap/palette/wordsearch copies.)
+function Pluginaro.input_is_active()
+    local deps = get_deps()
+    local uimanager = deps and deps.uimanager
+    if not uimanager then return false end
+    local stack = uimanager._window_stack
+    if type(stack) ~= "table" or #stack == 0 then return false end
+    return has_focused_input(stack[#stack].widget)
+end
+
+--- Wrap a key-event handler so it no-ops (returns false, event flows on)
+-- whenever a modal is top-of-stack or a text input is focused. The wrapped
+-- handler is otherwise called verbatim (same self + args), so its return
+-- value is preserved.
+function Pluginaro.guard(handler)
+    return function(...)
+        if Pluginaro.is_modal_active() or Pluginaro.input_is_active() then
+            return false
+        end
+        return handler(...)
+    end
 end
 
 --- Stub — Task 3 fills in the toggle/signpost menu builder.
