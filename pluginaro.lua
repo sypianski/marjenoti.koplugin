@@ -373,6 +373,69 @@ function Pluginaro.guard(handler)
     end
 end
 
+----------------------------------------------------------------------
+-- Family overlay claim (ui._kokb_overlay)
+--
+-- Family overlays (visel, hilite, kopad's selector) are plain widgets —
+-- not Menu/dialog subclasses — so is_modal_active() cannot see them.
+-- They coordinate through a single ownership flag on the ReaderUI
+-- instance instead: `ui._kokb_overlay` holds the NAME of the overlay
+-- that currently owns the screen (nil = none).
+--
+-- Contract:
+--   • Every family overlay claims the flag when it opens
+--     (claim_overlay) and releases it when it closes (release_overlay).
+--   • claim succeeds only when the flag is free or already held by the
+--     same name (re-claim is idempotent). A refused claim means another
+--     family overlay is up — do not open on top of it.
+--   • release clears the flag ONLY when `name` is the current owner, so
+--     a stale close from overlay A can never drop overlay B's claim.
+--   • Global-shortcut guards call overlay_active(ui) alongside
+--     is_modal_active(): reader-level shortcuts stand down while any
+--     family overlay is up. An overlay's OWN key_events are unaffected —
+--     its controller sits in front of the global handlers in
+--     active_widgets and consumes its keys first.
+--   • The flag lives on the ui instance (not in this module), so every
+--     plugin's verbatim pluginaro copy sees the same state.
+----------------------------------------------------------------------
+
+--- True while a family overlay holds the claim on this ui.
+-- @param ui table — the ReaderUI/FileManager instance the caller runs in.
+-- @param except (optional) string — a claim held by `except` itself does
+--   NOT count (used by kopad's gamepad handlers, which must keep driving
+--   kopad's own overlay while standing down under anyone else's).
+function Pluginaro.overlay_active(ui, except)
+    if type(ui) ~= "table" then return false end
+    local owner = ui._kokb_overlay
+    if owner == nil or owner == false or owner == "" then return false end
+    if except ~= nil and owner == except then return false end
+    return true
+end
+
+--- Claim the overlay flag for `name`. Returns true when claimed (or
+-- already held by `name`); false when another overlay holds it — the
+-- caller must then refrain from opening.
+function Pluginaro.claim_overlay(ui, name)
+    if type(ui) ~= "table" then return false end
+    if type(name) ~= "string" or name == "" then return false end
+    local owner = ui._kokb_overlay
+    if owner ~= nil and owner ~= false and owner ~= "" and owner ~= name then
+        return false
+    end
+    ui._kokb_overlay = name
+    return true
+end
+
+--- Release the overlay flag — but only when `name` is the current owner.
+-- Returns true when released; false when the flag was free or held by
+-- someone else (in which case it is left untouched).
+function Pluginaro.release_overlay(ui, name)
+    if type(ui) ~= "table" then return false end
+    if ui._kokb_overlay ~= name then return false end
+    ui._kokb_overlay = nil
+    return true
+end
+
 --- Build the „Rozszerzenia" sub_item_table for a given plugin.
 --
 -- Scans every registration where `self_name` appears as host OR provider
