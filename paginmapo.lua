@@ -180,7 +180,7 @@ end
 -- Word collection
 ----------------------------------------------------------------------
 
-function WordSource.collect_words(doc, screen_h)
+local function collect_words_impl(doc, screen_h)
     local items = {}
     local top_xp = doc:getXPointer()
     if not top_xp then return items end
@@ -263,6 +263,83 @@ function WordSource.collect_words(doc, screen_h)
 
     logger.dbg("visel: collected", #items, "words")
     return items
+end
+
+----------------------------------------------------------------------
+-- Per-page memoization of collect_words
+--
+-- collect_words is a pure function of the current page geometry — it only
+-- reads document positions.  With boustrophedon + marjenoti + vortpaf all
+-- active, marjenoti (_text_block_right) and vortpaf (_updateMarginItems)
+-- each call it once per page-turn with IDENTICAL (doc, screen_h) arguments:
+-- two full geometry scans (each up to MAX_WORDS_PER_PAGE
+-- getScreenBoxesFromPositions calls) producing one identical result.
+-- (During a lookup vortpaf also calls it twice itself — _captureContext and
+-- _updateMarginItems — so the redundancy is worse than 2×.)
+--
+-- paginmapo is require()d by name, so package.loaded hands every plugin the
+-- SAME module instance; this module-level cache is therefore shared across
+-- all consumers in one process, with no inter-plugin coordination.
+--
+-- Invalidation is by PAGE IDENTITY, never a wall-clock timer: the key is the
+-- top-of-view xpointer plus the screen dimensions.  Any page-turn or scroll
+-- moves the top xpointer; any rotation changes the screen dims — either one
+-- misses the cache and forces a fresh scan.  A cached result can thus only
+-- ever serve the burst of consumer callbacks fired synchronously for ONE
+-- page event; it can never survive to the next event, so there is no
+-- long-lived stale window.  When no key can be derived (nil xpointer) the
+-- result is not cached and any previous entry is dropped, so a wrong entry
+-- is never served.
+--
+-- Consumers MUST treat the returned table as read-only — it is shared.  All
+-- current consumers (marjenoti, vortpaf, collect_sentences_from_words) only
+-- read it.
+----------------------------------------------------------------------
+
+local _ok_dev, _Device = pcall(require, "device")
+
+local _cache = { doc = nil, key = nil, words = nil }
+local _stats = { compute = 0, hit = 0 }
+
+local function page_key(doc, screen_h)
+    local ok, top = pcall(doc.getXPointer, doc)
+    if not ok or not top then return nil end
+    local sw = 0
+    if _ok_dev and _Device and _Device.screen then
+        local ok_w, w = pcall(_Device.screen.getWidth, _Device.screen)
+        if ok_w and w then sw = w end
+    end
+    return top .. "|" .. tostring(screen_h) .. "x" .. tostring(sw)
+end
+
+function WordSource.collect_words(doc, screen_h)
+    local key = page_key(doc, screen_h)
+    if key and _cache.doc == doc and _cache.key == key and _cache.words then
+        _stats.hit = _stats.hit + 1
+        logger.dbg("paginmapo: collect_words CACHE HIT", key,
+                   "(compute=", _stats.compute, "hit=", _stats.hit, ")")
+        return _cache.words
+    end
+    _stats.compute = _stats.compute + 1
+    local items = collect_words_impl(doc, screen_h)
+    if key then
+        _cache.doc, _cache.key, _cache.words = doc, key, items
+    else
+        _cache.doc, _cache.key, _cache.words = nil, nil, nil
+    end
+    logger.dbg("paginmapo: collect_words COMPUTE", key or "(nokey)", "->",
+               #items, "words (compute=", _stats.compute, "hit=", _stats.hit, ")")
+    return items
+end
+
+-- Test / measurement hooks.
+function WordSource._cache_stats()
+    return { compute = _stats.compute, hit = _stats.hit }
+end
+
+function WordSource._cache_reset()
+    _cache.doc, _cache.key, _cache.words = nil, nil, nil
+    _stats.compute, _stats.hit = 0, 0
 end
 
 ----------------------------------------------------------------------
