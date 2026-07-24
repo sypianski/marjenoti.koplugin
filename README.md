@@ -37,6 +37,18 @@ Font and font size adjust under *Tools → Marjenoti*. The plugin picks the best
 - Falls back to a 78%-of-screen heuristic when `paginmapo` is unavailable or the document is paged (PDF)
 - Stacks notes vertically without overlap (each item carries its own `y_top` + height)
 
+## Integration with visel (pluginaro)
+
+Marjenoti registers itself as an extension provider with `pluginaro`, the
+shared cross-plugin registry (`pluginaro.lua`, also vendored here). If the
+`visel` plugin is installed, its **N** key jumps between margin notes on the
+current page: visel owns the key binding, marjenoti supplies the list of
+note-carrying annotation xpointers via `Pluginaro.register("visel", { id =
+"note_jump", ... get_targets = ... })` (see `main.lua`). The extension is
+opt-in and disabled by default — enable it from visel's own extensions menu.
+Without visel installed, marjenoti behaves exactly as described above; the
+integration is inert.
+
 ## Bundled `paginmapo.lua`
 
 This plugin vendors `paginmapo.lua` (Ido for "page-map") — a 411-line CRengine helper that extracts visible words with screen positions and xpointer anchors. It is also used by the sibling plugins keyreader, kopad, and assistant. Each ships its own copy so they remain runtime-independent.
