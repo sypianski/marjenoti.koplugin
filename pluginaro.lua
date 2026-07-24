@@ -28,6 +28,15 @@ if not ok_logger or type(logger) ~= "table" then
     logger = { dbg = noop, info = noop, warn = noop, err = noop }
 end
 
+-- gettext is a KOReader module; fall back to identity so the core loads
+-- in a bare Lua interpreter (see lib/pluginaro_test.lua). Named `_T` (not
+-- `_`) because this file uses `_` pervasively as the throwaway loop
+-- variable — a plain `_` alias would get shadowed inside those loops.
+local ok_gettext, _T = pcall(require, "gettext")
+if not ok_gettext or type(_T) ~= "function" then
+    _T = function(s) return s end
+end
+
 local Pluginaro = {
     _deps = nil,  -- lazy: { settings = G_reader_settings, uimanager = UIManager }
 }
@@ -129,7 +138,7 @@ function Pluginaro.register(host, opts)
 end
 
 --- All registrations for a host, sorted by (section, id). Never nil —
--- an empty array means the host skips its „Rozszerzenia" menu section.
+-- an empty array means the host skips its "Extensions" menu section.
 function Pluginaro.list_for(host)
     local out = {}
     for _, entry in pairs(registry()) do
@@ -436,7 +445,7 @@ function Pluginaro.release_overlay(ui, name)
     return true
 end
 
---- Build the „Rozszerzenia" sub_item_table for a given plugin.
+--- Build the "Extensions" sub_item_table for a given plugin.
 --
 -- Scans every registration where `self_name` appears as host OR provider
 -- and emits one menu row per registration:
@@ -449,7 +458,7 @@ end
 --
 --   Annotation row — when `self_name` is the OTHER side:
 --     • non-clickable (enabled_func → false); carries help_text naming where
---       the toggle actually lives: „Włącz w: Ustawienia <other> → Rozszerzenia"
+--       the toggle actually lives: "Enable in: Settings <other> → Extensions"
 --
 -- @param self_name  string — name of the calling plugin (e.g. "kopad")
 -- @param label_prefix  (optional) string prepended to each row label;
@@ -528,8 +537,8 @@ function Pluginaro.build_ext_menu(self_name, label_prefix)
             rows[#rows + 1] = {
                 text = "ℹ " .. label,
                 enabled_func = function() return false end,
-                help_text = "Włącz w: Ustawienia " .. other_plugin
-                            .. " → Rozszerzenia",
+                help_text = _T("Enable in: Settings ") .. other_plugin
+                            .. _T(" → Extensions"),
             }
         end
     end

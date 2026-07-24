@@ -400,7 +400,7 @@ function MarginNotes:addToMainMenu(menu_items)
     local ext_rows = Pluginaro.build_ext_menu("marjenoti")
     if #ext_rows > 0 then
         table.insert(sub_items, {
-            text = _("Rozszerzenia"),
+            text = _("Extensions"),
             sub_item_table = ext_rows,
         })
     end
